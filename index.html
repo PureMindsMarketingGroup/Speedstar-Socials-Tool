@@ -19,7 +19,7 @@
      minuten cachen; zonder dit nummer kan een nieuwe index.html met een
      oude styles.css of app.js worden gecombineerd en werkt de helft niet.
      Bij elke deploy hier en bij de twee scripts hetzelfde nummer ophogen. -->
-<link rel="stylesheet" href="css/styles.css?v=20261012b">
+<link rel="stylesheet" href="css/styles.css?v=20261012c">
 </head>
 <body>
 
@@ -225,15 +225,15 @@
           <svg class="ico chev" aria-hidden="true"><use href="#i-chevron"/></svg>
         </summary>
         <div class="panel__body">
-          <p class="hint" id="libEmpty">Elke post die je downloadt komt hier te staan. Klik hem later aan om de tekst aan te passen en opnieuw te downloaden.</p>
+          <p class="hint" id="libEmpty">Elke post die je downloadt komt hier automatisch te staan. Klik hem later aan om verder te werken: een nieuwe download wordt een nieuwe versie, de oude blijft bewaard.</p>
 
           <p class="hint">De bibliotheek staat in deze browser, op dit webadres. Posts die je op een ander adres of een andere computer maakt zie je hier dus niet.</p>
 
           <div class="lib" id="libList"></div>
 
           <div class="libnote" id="libOpenNote" hidden>
-            <span>Je werkt aan een opgeslagen post. De volgende download werkt hem bij.</span>
-            <button class="btn btn--ghost btn--sm" id="libDetach" type="button">Als nieuw opslaan</button>
+            <span id="libOpenText">Je werkt aan een opgeslagen post. Download je opnieuw, dan komt er een nieuwe versie bij.</span>
+            <button class="btn btn--ghost btn--sm" id="libDetach" type="button" title="De volgende download begint een nieuwe post in plaats van een volgende versie">Begin als nieuwe post</button>
           </div>
         </div>
       </details>
@@ -379,7 +379,7 @@
       <span class="sep"></span>
       <span id="fitInfo">Schaal 100%</span>
       <span class="sep"></span>
-      <span class="statusbar__ver" id="brandInfo">Versie 20261012b</span>
+      <span class="statusbar__ver" id="brandInfo">Versie 20261012c</span>
       <span class="sep statusbar__ver"></span>
       <span id="aiInfo">AI: niet verbonden</span>
       <span class="sep statusbar__wide"></span>
@@ -682,7 +682,7 @@
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js" defer></script>
 
 <!-- Eigen modules: typografie-/templateregels, dan de app -->
-<script src="js/typography.js?v=20261012b" defer></script>
-<script src="js/app.js?v=20261012b" defer></script>
+<script src="js/typography.js?v=20261012c" defer></script>
+<script src="js/app.js?v=20261012c" defer></script>
 </body>
 </html>

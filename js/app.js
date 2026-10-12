@@ -2017,9 +2017,13 @@
         })
       : blobPromise.then(function (blob) {
           var name = downloadBlob(blob, ext);
-          toast('Opgeslagen als ' + name + (logoLost ? ' — let op: het logo ontbreekt (file://).' : ''), logoLost ? 'warn' : 'ok');
-          /* Elke download komt ook in de bibliotheek te staan */
-          return canvasPromise.then(libSave).catch(function () {
+          var lost = logoLost ? ' Let op: het logo ontbreekt (file://).' : '';
+          /* Elke download komt ook in de bibliotheek te staan, als nieuwe versie */
+          return canvasPromise.then(libSave).then(function (meta) {
+            var waar = !meta ? 'Ongewijzigd, staat al in de bibliotheek.'
+              : 'In de bibliotheek als ' + (meta.version > 1 ? 'versie ' + meta.version + '.' : 'nieuwe post.');
+            toast('Gedownload: ' + name + '. ' + waar + lost, logoLost ? 'warn' : 'ok', 5000);
+          }, function () {
             toast('De post is gedownload, maar paste niet meer in de bibliotheek. Verwijder er een paar.', 'warn', 7000);
           });
         });
@@ -2040,12 +2044,17 @@
      De lijst met miniaturen staat als een record onder 'library' in IndexedDB;
      de post zelf (alle instellingen plus de foto) onder 'proj:<id>'. Zo blijft
      het openen van het paneel licht, ook bij foto's van een paar megabyte.
-     Openen zet currentProjectId; de volgende download werkt die post bij in
-     plaats van een nieuwe aan te maken.
+     Een download overschrijft nooit iets: elke download is een nieuwe
+     versie. Versies van dezelfde post delen een `family` (het id van de
+     eerste versie) en tellen op (version 1, 2, 3...). currentProjectId is de
+     versie waar je nu aan werkt; de volgende download wordt zijn opvolger.
+     Is er sinds de laatste download niets veranderd, dan komt er geen
+     dubbele versie bij (savedSnap).
      ========================================================================= */
   var LIB_INDEX = 'library';
   var library = [];
   var currentProjectId = null;
+  var savedSnap = null;      // stand van de post bij de laatste download of het openen
 
   function libKey(id) { return 'proj:' + id; }
   function newProjectId() { return 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
@@ -2078,12 +2087,32 @@
   function libLoad() {
     return DB.get(LIB_INDEX).then(function (list) {
       library = Array.isArray(list) ? list : [];
+      if (currentProjectId && libIndexOf(currentProjectId) < 0) currentProjectId = null;
+      historyRebase();
       libRender();
     }).catch(noop);
   }
 
+  function familyOf(p) { return p.family || p.id; }
+
+  function nextVersion(family) {
+    var max = 0;
+    library.forEach(function (p) { if (familyOf(p) === family) max = Math.max(max, p.version || 1); });
+    return max + 1;
+  }
+
+  /* Niets veranderd sinds de laatste download van deze post? */
+  function unchangedSinceSave() {
+    return !!(savedSnap && currentProjectId && savedSnap.project === currentProjectId &&
+              libIndexOf(currentProjectId) >= 0 && !changedKeys(savedSnap, snapshot()).length);
+  }
+
+  /* Geeft de meta van de nieuwe versie, of null als er niets veranderd was */
   function libSave(canvas) {
-    var id = currentProjectId || newProjectId();
+    if (unchangedSinceSave()) return Promise.resolve(null);
+    var parent = currentProjectId ? library[libIndexOf(currentProjectId)] : null;
+    var id = newProjectId();
+    var family = parent ? familyOf(parent) : id;
     var settings = {};
     Object.keys(DEFAULTS).forEach(function (k) { settings[k] = state[k]; });
     settings.image = null;
@@ -2092,20 +2121,23 @@
     var record = { id: id, settings: settings, image: state.image,
                    imageName: state.imageName, imageRatio: state.imageRatio };
     var meta = { id: id, name: projectName(), template: state.template,
-                 updatedAt: Date.now(), thumb: makeThumb(canvas) };
+                 updatedAt: Date.now(), thumb: makeThumb(canvas),
+                 family: family, version: parent ? nextVersion(family) : 1 };
 
     var wasLeeg = library.length === 0;
     return DB.set(libKey(id), record).then(function () {
-      var i = libIndexOf(id);
-      if (i >= 0) library.splice(i, 1);
       library.unshift(meta);
       return DB.set(LIB_INDEX, library);
     }).then(function () {
       currentProjectId = id;
+      savedSnap = snapshot();
+      historyRebase();                     // de nieuwe versie is geen extra stap
+      persistSoon();
       libRender();
       /* Bij de allereerste opgeslagen post het paneel één keer openklappen,
          zodat duidelijk is waar de download terechtkomt. */
       if (wasLeeg && $('libraryPanel')) $('libraryPanel').open = true;
+      return meta;
     });
   }
 
@@ -2124,8 +2156,11 @@
       else DB.del('image').catch(noop);
       lastFlowHtml = null;
       flushRender();
+      savedSnap = snapshot();
       libRender();
-      toast('Post geopend. Pas hem aan en download opnieuw om hem bij te werken.', 'ok', 6000);
+      var p = library[libIndexOf(id)];
+      toast('Post geopend' + (p && p.version > 1 ? ' (versie ' + p.version + ')' : '') +
+            '. Pas hem aan en download: dat wordt een nieuwe versie, deze blijft bewaard.', 'ok', 6000);
     }).catch(function () { toast('De post kon niet worden geopend.', 'error'); });
   }
 
@@ -2156,12 +2191,13 @@
     });
   }
 
-  /* Losmaken: de volgende download wordt een nieuwe post in plaats van een
-     bijwerking van de post die nu open staat. */
+  /* Losmaken: de volgende download begint een nieuwe post (versie 1) in
+     plaats van een volgende versie van de post die nu open staat. */
   function libDetach() {
     currentProjectId = null;
+    savedSnap = null;
     libRender();
-    toast('De volgende download komt er als nieuwe post bij.', 'ok');
+    toast('De volgende download wordt een nieuwe, losse post.', 'ok');
   }
 
   function libRender() {
@@ -2169,7 +2205,11 @@
     if (!list) return;
     setText($('libCount'), String(library.length));
     if ($('libEmpty')) $('libEmpty').hidden = library.length > 0;
-    if ($('libOpenNote')) $('libOpenNote').hidden = !currentProjectId;
+    var open = currentProjectId ? library[libIndexOf(currentProjectId)] : null;
+    if ($('libOpenNote')) $('libOpenNote').hidden = !open;
+    if (open) setText($('libOpenText'), 'Je werkt aan "' + open.name + '"' +
+      (open.version > 1 ? ' (versie ' + open.version + ')' : '') +
+      '. Download je opnieuw, dan komt er versie ' + nextVersion(familyOf(open)) + ' bij; deze blijft bewaard.');
 
     list.innerHTML = '';
     library.forEach(function (p) {
@@ -2195,8 +2235,17 @@
       naam.textContent = p.name;
       var wanneer = document.createElement('i');
       var tpl = TYPO.TEMPLATES[p.template];
-      wanneer.textContent = new Date(p.updatedAt).toLocaleDateString('nl-NL', { day: 'numeric', month: 'short' })
-        + (tpl ? ' \u00b7 ' + tpl.short : '');
+      var d = new Date(p.updatedAt);
+      wanneer.textContent = d.toLocaleDateString('nl-NL', { day: 'numeric', month: 'short' }) + ' ' +
+        d.toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' }) +
+        (tpl ? ' \u00b7 ' + tpl.short : '');
+      if (p.version > 1) {
+        var v = document.createElement('span');
+        v.className = 'lib__ver';
+        v.textContent = 'v' + p.version;
+        v.title = 'Versie ' + p.version;
+        card.appendChild(v);
+      }
       meta.appendChild(naam);
       meta.appendChild(wanneer);
       card.appendChild(meta);
@@ -2227,6 +2276,7 @@
       Object.keys(DEFAULTS).forEach(function (k) { copy[k] = state[k]; });
       copy.image = null;          // de foto zelf staat in IndexedDB
       copy.imageRatio = null;
+      copy.project = currentProjectId;   // na herladen telt de versie gewoon door
       localStorage.setItem(STORAGE_KEY, JSON.stringify(copy));
     } catch (err) { /* privémodus of vol geheugen */ }
   }
@@ -2246,6 +2296,7 @@
     });
     migrateFocus(saved);
     validateState();
+    if (typeof saved.project === 'string') currentProjectId = saved.project;
     state.image = null;
     state.imageRatio = null;
   }
