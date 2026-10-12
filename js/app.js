@@ -87,7 +87,7 @@
   var DEFAULTS = {
     template: 'a',
     image: null, imageName: '', imageRatio: null,
-    overlay: 40, zoom: 100, focus: 'center', gradient: 'none', gradientStrength: 100,
+    overlay: 40, zoom: 100, posX: 50, posY: 50, gradient: 'none', gradientStrength: 100,
     bgColor: 'navy',
     kicker: '', title: '', intro: '', data: '', accents: '',
     headSize: 'h2', autoFit: true, textColor: 'white', accentColor: 'lightblue',
@@ -143,13 +143,30 @@
   var fieldEls = { kicker: $('fKicker'), title: $('fTitle'), intro: $('fBody'), data: $('fData'),
                    accents: $('fAccent'), reviewer: $('fReviewer'), reviewDate: $('fDate'), items: $('fItems') };
 
+  /* action: { label, run } geeft de toast een knop, bijvoorbeeld
+     "Ongedaan maken". Zo'n toast blijft langer staan. */
   var toastTimer;
-  function toast(message, kind, ms) {
+  function toast(message, kind, ms, action) {
     clearTimeout(toastTimer);
-    el.toast.textContent = message;
-    el.toast.className = 'toast is-visible' + (kind ? ' is-' + kind : '');
-    var duration = ms || (kind === 'error' ? 7000 : kind === 'warn' ? 5500 : 3200);
-    toastTimer = setTimeout(function () { el.toast.className = 'toast'; }, duration);
+    el.toast.textContent = '';
+    var txt = document.createElement('span');
+    txt.textContent = message;
+    el.toast.appendChild(txt);
+    if (action) {
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'toast__action';
+      btn.textContent = action.label;
+      btn.addEventListener('click', function () { hideToast(); action.run(); });
+      el.toast.appendChild(btn);
+    }
+    el.toast.className = 'toast is-visible' + (kind ? ' is-' + kind : '') + (action ? ' has-action' : '');
+    var duration = ms || (action ? 8000 : kind === 'error' ? 7000 : kind === 'warn' ? 5500 : 3200);
+    toastTimer = setTimeout(hideToast, duration);
+  }
+  function hideToast() {
+    clearTimeout(toastTimer);
+    el.toast.className = 'toast';
   }
 
   function showEnvNotice(title, html) {
@@ -280,8 +297,20 @@
     } else {
       el.pcImage.style.backgroundSize = zoom === 1 ? 'cover' : (100 * zoom).toFixed(2) + '% auto';
     }
-    el.pcImage.style.backgroundPosition =
-      '50% ' + (state.focus === 'top' ? '0%' : state.focus === 'bottom' ? '100%' : '50%');
+    el.pcImage.style.backgroundPosition = state.posX.toFixed(2) + '% ' + state.posY.toFixed(2) + '%';
+  }
+
+  /* Hoeveel de foto bij de huidige zoom uitsteekt buiten het canvas, als
+     fractie van de canvasmaat. 0 = geen ruimte om in die richting te
+     verschuiven. Nodig om slepen in pixels om te rekenen naar procenten. */
+  function photoOverflow() {
+    var zoom = state.zoom / 100, bw = 100, bh = 100;
+    var boxRatio = CANVAS.w / CANVAS.h;
+    if (state.imageRatio) {
+      if (state.imageRatio > boxRatio) bw = 100 * state.imageRatio / boxRatio;
+      else bh = 100 * boxRatio / state.imageRatio;
+    }
+    return { x: Math.max(0, bw * zoom / 100 - 1), y: Math.max(0, bh * zoom / 100 - 1) };
   }
 
   /* Template + modifiers op het canvas. De CSS regelt per data-template de
@@ -359,7 +388,6 @@
   /* Bediening gelijktrekken met de state (na AI-voorstel, herstel of reset) */
   function syncUI() {
     setRadio('template', state.template);
-    setRadio('focus', state.focus);
     setRadio('headSize', state.headSize);
     setRadio('textColor', state.textColor);
     setRadio('accentColor', state.accentColor);
@@ -412,6 +440,7 @@
     renderText();
     autoFit();
     syncUI();
+    historyTrack();
     persistSoon();
   }
 
@@ -437,6 +466,99 @@
     if (renderQueued) { cancelAnimationFrame(renderHandle); renderQueued = false; }
     render();
   }
+
+  /* --- Ongedaan maken / opnieuw -------------------------------------------
+     Na elke render vergelijken we de state met de laatste stap. Is er iets
+     veranderd, dan komt er een stap bij. Typen in hetzelfde veld of slepen
+     met dezelfde schuif binnen 700 ms wordt samen één stap. De foto zit als
+     data-URL in de stap; dat is een verwijzing naar dezelfde string, geen
+     kopie. Exportinstellingen (PNG/JPG, 1x/2x) horen er niet bij. */
+  var HISTORY_MAX = 100;
+  var HISTORY_MERGE_MS = 700;
+  var HISTORY_KEYS = Object.keys(DEFAULTS).filter(function (k) { return k !== 'format' && k !== 'exportScale'; });
+  var HISTORY_MERGE_KEYS = ['kicker', 'title', 'intro', 'data', 'accents', 'reviewer', 'reviewDate', 'items',
+                            'overlay', 'zoom', 'posX', 'posY', 'gradientStrength', 'watermarkOpacity'];
+  var hist = { stack: [], index: -1, lastSig: '', lastAt: 0 };
+
+  function snapshot() {
+    var snap = { project: currentProjectId };
+    HISTORY_KEYS.forEach(function (k) { snap[k] = state[k]; });
+    return snap;
+  }
+
+  function changedKeys(a, b) {
+    return HISTORY_KEYS.filter(function (k) { return a[k] !== b[k]; });
+  }
+
+  function historyTrack() {
+    var cur = snapshot();
+    var base = hist.stack[hist.index];
+    if (!base) { hist.stack = [cur]; hist.index = 0; updateHistoryButtons(); return; }
+    var keys = changedKeys(base, cur);
+    if (!keys.length) { base.project = cur.project; return; }
+
+    var sig = keys.join(','), now = Date.now();
+    var merge = hist.index > 0 && hist.index === hist.stack.length - 1 &&
+                sig === hist.lastSig && now - hist.lastAt < HISTORY_MERGE_MS &&
+                keys.every(function (k) { return HISTORY_MERGE_KEYS.indexOf(k) !== -1; });
+    if (merge) {
+      hist.stack[hist.index] = cur;
+    } else {
+      hist.stack = hist.stack.slice(0, hist.index + 1);
+      hist.stack.push(cur);
+      if (hist.stack.length > HISTORY_MAX) hist.stack.shift();
+      hist.index = hist.stack.length - 1;
+    }
+    hist.lastSig = sig;
+    hist.lastAt = now;
+    updateHistoryButtons();
+  }
+
+  /* De huidige stap gelijktrekken zonder een nieuwe stap te maken, bijvoorbeeld
+     als de foto bij het opstarten uit IndexedDB terugkomt. */
+  function historyRebase() {
+    if (hist.index < 0) return;
+    hist.stack[hist.index] = snapshot();
+  }
+
+  function applySnapshot(snap) {
+    var imageChanged = snap.image !== state.image;
+    HISTORY_KEYS.forEach(function (k) { state[k] = snap[k]; });
+    currentProjectId = snap.project || null;
+    if (imageChanged) {
+      showImageCard(0);
+      if (state.image) DB.set('image', { dataUrl: state.image, name: state.imageName, ratio: state.imageRatio, size: 0 }).catch(noop);
+      else DB.del('image').catch(noop);
+    }
+    hist.lastSig = '';
+    lastFlowHtml = null;
+    libRender();
+    flushRender();
+  }
+
+  function undo() {
+    if (renderQueued) flushRender();       // een wijziging van dit frame eerst vastleggen
+    if (hist.index <= 0) return;
+    hist.index--;
+    applySnapshot(hist.stack[hist.index]);
+    updateHistoryButtons();
+  }
+
+  function redo() {
+    if (renderQueued) flushRender();
+    if (hist.index >= hist.stack.length - 1) return;
+    hist.index++;
+    applySnapshot(hist.stack[hist.index]);
+    updateHistoryButtons();
+  }
+
+  function updateHistoryButtons() {
+    var u = $('undoBtn'), r = $('redoBtn');
+    if (u) u.disabled = hist.index <= 0;
+    if (r) r.disabled = hist.index >= hist.stack.length - 1;
+  }
+
+  var UNDO_ACTION = { label: 'Ongedaan maken', run: function () { undo(); } };
 
   /* Template wisselen: alles blijft bewaard, alleen de lay-out verandert */
   function setTemplate(key) {
@@ -514,6 +636,7 @@
       state.image = rec.dataUrl;
       state.imageName = rec.name || 'foto';
       state.imageRatio = rec.ratio || null;
+      historyRebase();                      // terugzetten bij het opstarten is geen stap
       showImageCard(rec.size || 0);
       scheduleRender();
     }).catch(noop);
@@ -1101,6 +1224,152 @@
   }
 
   /* ===========================================================================
+     7b. WERKEN IN DE PREVIEW
+     -----------------------------------------------------------------------
+     - Wijs je een tekstblok of het logo aan, dan verschijnt er een kader
+       met de naam van het veld. Klikken springt naar dat veld in de zijbalk.
+     - Op de foto: slepen verschuift de uitsnede, pijltjestoetsen ook
+       (Shift = grotere stap). Klikken zonder slepen opent het fotopaneel.
+     - Zonder foto is het canvas zelf de uploadknop.
+     Het kader staat in .canvas-shell, buiten #postCanvas, dus nooit in de
+     export.
+     ========================================================================= */
+  var FIELD_LABELS = {
+    kicker: 'Bovenkop', title: 'Hoofdkop', intro: 'Inleiding', data: 'Groot getal',
+    reviewer: 'Naam van de klant', stars: 'Sterren', items: 'Certificeringen', logo: 'Logo'
+  };
+  var PAN_THRESHOLD = 5;      // px; minder bewegen telt als klik
+  var shell = $('canvasShell');
+  var editHint = null;
+  var pan = null;
+
+  function regionAt(target) {
+    var node = target && target.closest ? target.closest('[data-field]') : null;
+    if (node && el.pcFlow.contains(node)) return { node: node, field: node.getAttribute('data-field') };
+    if (target && target.closest && target.closest('.pc-logo')) return { node: el.pcLogoBox, field: 'logo' };
+    return { node: el.canvas, field: 'photo' };
+  }
+
+  function showEditHint(region) {
+    if (!shell) return;
+    if (!editHint) {
+      editHint = document.createElement('div');
+      editHint.className = 'edit-hint';
+      editHint.setAttribute('aria-hidden', 'true');
+      editHint.appendChild(document.createElement('span'));
+      shell.appendChild(editHint);
+    }
+    var isPhoto = region.field === 'photo';
+    var label = isPhoto
+      ? (state.image ? 'Sleep om de foto te verschuiven' : 'Klik of sleep een foto hierheen')
+      : FIELD_LABELS[region.field] || region.field;
+    var s = shell.getBoundingClientRect();
+    var r = region.node.getBoundingClientRect();
+    var pad = isPhoto ? 0 : 6;
+    editHint.style.left = (r.left - s.left - pad) + 'px';
+    editHint.style.top = (r.top - s.top - pad) + 'px';
+    editHint.style.width = (r.width + pad * 2) + 'px';
+    editHint.style.height = (r.height + pad * 2) + 'px';
+    editHint.classList.toggle('is-photo', isPhoto);
+    editHint.classList.add('is-visible');
+    setText(editHint.firstChild, label);
+  }
+
+  function hideEditHint() {
+    if (editHint) editHint.classList.remove('is-visible');
+  }
+
+  /* Springt naar het veld in de zijbalk: paneel open, in beeld, focus, en
+     het veld licht even op. */
+  function reveal(field) {
+    var ctrl = fieldEls[field] ||
+      (field === 'stars' ? document.querySelector('input[name="stars"]:checked') : null) ||
+      (field === 'logo' ? document.querySelector('input[name="logoType"]:checked') : null) ||
+      (field === 'photo' ? (state.image ? $('zoom') : el.imageDrop) : null);
+    if (!ctrl) return;
+    var box = ctrl.closest('.field') || ctrl;
+    openPanel(ctrl.closest('details.panel'), false);
+    requestAnimationFrame(function () {
+      try { box.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (err) { box.scrollIntoView(); }
+      try { ctrl.focus({ preventScroll: true }); } catch (err) { ctrl.focus(); }
+      if (typeof ctrl.setSelectionRange === 'function' && /^(text|textarea)$/.test(ctrl.type)) {
+        var end = ctrl.value.length;
+        ctrl.setSelectionRange(end, end);
+      }
+      box.classList.remove('is-flash');
+      void box.offsetWidth;                 // animatie opnieuw starten
+      box.classList.add('is-flash');
+      setTimeout(function () { box.classList.remove('is-flash'); }, 1200);
+    });
+  }
+
+  function nudgePhoto(dx, dy) {
+    var ov = photoOverflow();
+    if (ov.x > 0) state.posX = clamp(state.posX + dx, 0, 100);
+    if (ov.y > 0) state.posY = clamp(state.posY + dy, 0, 100);
+    scheduleRender();
+  }
+
+  function bindPreview() {
+    var c = el.canvas;
+    if (!c || !shell) return;
+
+    c.addEventListener('pointermove', function (e) {
+      if (pan) {
+        var dx = e.clientX - pan.x, dy = e.clientY - pan.y;
+        if (!pan.moved && Math.abs(dx) < PAN_THRESHOLD && Math.abs(dy) < PAN_THRESHOLD) return;
+        if (!pan.moved) { pan.moved = true; hideEditHint(); }
+        if (!pan.canPan) return;
+        /* background-position p% legt het overschot (foto - canvas) voor p%
+           links/boven. Naar rechts slepen = minder overschot links = lagere p. */
+        var box = c.getBoundingClientRect();
+        var ov = photoOverflow();
+        if (ov.x > 0) state.posX = clamp(pan.startX - dx / (box.width * ov.x) * 100, 0, 100);
+        if (ov.y > 0) state.posY = clamp(pan.startY - dy / (box.height * ov.y) * 100, 0, 100);
+        scheduleRender();
+        return;
+      }
+      if (e.pointerType === 'mouse' && !exporting) showEditHint(regionAt(e.target));
+    });
+    c.addEventListener('pointerleave', function () { if (!pan) hideEditHint(); });
+
+    c.addEventListener('pointerdown', function (e) {
+      if (e.button !== 0 || exporting) return;
+      var region = regionAt(e.target);
+      pan = { x: e.clientX, y: e.clientY, startX: state.posX, startY: state.posY,
+              region: region, moved: false, canPan: region.field === 'photo' && !!state.image };
+      if (pan.canPan) {
+        try { c.setPointerCapture(e.pointerId); } catch (err) { /* oud */ }
+        shell.classList.add('is-panning');
+      }
+    });
+
+    function endPan(e, cancelled) {
+      if (!pan) return;
+      var p = pan;
+      pan = null;
+      shell.classList.remove('is-panning');
+      try { c.releasePointerCapture(e.pointerId); } catch (err) { /* niet vast */ }
+      if (cancelled || p.moved) return;
+      if (p.region.field === 'photo' && !state.image) el.imageInput.click();
+      else reveal(p.region.field);
+    }
+    c.addEventListener('pointerup', function (e) { endPan(e, false); });
+    c.addEventListener('pointercancel', function (e) { endPan(e, true); });
+
+    /* Pijltjestoetsen op de preview verschuiven de foto */
+    shell.addEventListener('keydown', function (e) {
+      if (!state.image || e.target !== shell) return;
+      var step = e.shiftKey ? 10 : 2;
+      var map = { ArrowLeft: [step, 0], ArrowRight: [-step, 0], ArrowUp: [0, step], ArrowDown: [0, -step] };
+      var d = map[e.key];
+      if (!d) return;
+      e.preventDefault();
+      nudgePhoto(d[0], d[1]);
+    });
+  }
+
+  /* ===========================================================================
      8. EVENTS
      ========================================================================= */
   function on(node, ev, fn) { if (node) node.addEventListener(ev, fn); }
@@ -1154,9 +1423,25 @@
     });
   }
 
+  function pastedImage(data) {
+    if (!data) return null;
+    var files = data.files || [];
+    for (var i = 0; i < files.length; i++) if (/^image\//.test(files[i].type)) return files[i];
+    var items = data.items || [];
+    for (var j = 0; j < items.length; j++) {
+      if (items[j].kind === 'file' && /^image\//.test(items[j].type)) return items[j].getAsFile();
+    }
+    return null;
+  }
+
+  function isTextTarget(node) {
+    if (!node) return false;
+    if (node.isContentEditable || node.tagName === 'TEXTAREA') return true;
+    return node.tagName === 'INPUT' && /^(text|search|url|email|password|number)$/.test(node.type);
+  }
+
   function bindEvents() {
     bindRadio('template', 'template', setTemplate);
-    bindRadio('focus', 'focus');
     bindRadio('headSize', 'headSize');
     bindRadio('textColor', 'textColor');
     bindRadio('accentColor', 'accentColor');
@@ -1188,7 +1473,16 @@
     on($('exportScale'), 'change', function (e) { state.exportScale = e.target.value; persistSoon(); });
 
     bindDrop(el.imageDrop, el.imageInput, useUploadedImage);
-    on(el.imageRemove, 'click', clearImage);
+    on(el.imageRemove, 'click', function () {
+      clearImage();
+      toast('Foto verwijderd.', 'ok', 0, UNDO_ACTION);
+    });
+    on($('photoCenter'), 'click', function () {
+      state.posX = 50; state.posY = 50;
+      scheduleRender();
+    });
+    on($('undoBtn'), 'click', undo);
+    on($('redoBtn'), 'click', redo);
     on(el.envNoticeClose, 'click', hideEnvNotice);
     on($('libDetach'), 'click', libDetach);
 
@@ -1201,15 +1495,15 @@
 
     on(el.exportBtn, 'click', function () { exportImage('download'); });
     on(el.copyBtn, 'click', function () { exportImage('clipboard'); });
+    /* Geen bevestigingsvraag: de toast biedt ongedaan maken aan */
     on($('resetBtn'), 'click', function () {
-      if (!window.confirm('Tekst, foto en instellingen wissen?')) return;
-      state = Object.assign({}, DEFAULTS);
+      state = Object.assign({}, DEFAULTS, { format: state.format, exportScale: state.exportScale });
       currentProjectId = null;
       libRender();
       clearImage();
       el.statusLine.textContent = DEFAULT_STATUS;
       scheduleRender();
-      toast('Alles is teruggezet naar de standaard.', 'ok');
+      toast('Alles is teruggezet naar de standaard.', 'ok', 0, UNDO_ACTION);
     });
 
     /* Slepen over het hele venster: een afbeelding wordt de foto */
@@ -1231,11 +1525,29 @@
       else toast('Sleep een afbeelding (JPG, PNG, WebP).', 'warn');
     });
 
-    /* Ctrl/Cmd + S exporteert */
+    /* Een afbeelding plakken (Ctrl/Cmd + V) maakt er de foto van. Gewone
+       tekst plakken in een veld gaat gewoon door. */
+    window.addEventListener('paste', function (e) {
+      var file = pastedImage(e.clipboardData);
+      if (!file) return;
+      e.preventDefault();
+      useUploadedImage(file);
+    });
+
+    /* Sneltoetsen: Ctrl/Cmd + S exporteert, Ctrl/Cmd + Z en Shift + Z (of Y)
+       maken ongedaan en opnieuw. In een tekstveld doet de browser zelf het
+       ongedaan maken van het typen. */
     window.addEventListener('keydown', function (e) {
-      if ((e.ctrlKey || e.metaKey) && typeof e.key === 'string' && e.key.toLowerCase() === 's') {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey || typeof e.key !== 'string') return;
+      var key = e.key.toLowerCase();
+      if (key === 's') {
         e.preventDefault();
         exportImage('download');
+        return;
+      }
+      if ((key === 'z' || key === 'y') && !isTextTarget(e.target)) {
+        e.preventDefault();
+        if (key === 'y' || e.shiftKey) redo(); else undo();
       }
     });
 
@@ -1651,6 +1963,8 @@
     if (el.mobileCopy) el.mobileCopy.disabled = busy;
     document.body.classList.toggle('is-exporting', busy);
     var label = el.exportBtn.querySelector('span');
+    clearTimeout(doneTimer);
+    el.exportBtn.classList.remove('is-done');
     if (busy) {
       var mult = parseInt(state.exportScale, 10) || 1;
       label.textContent = 'Bezig met exporteren…';
@@ -1660,6 +1974,18 @@
       label.textContent = 'Download post';
       el.statusLine.textContent = busyStatus;
     }
+  }
+
+  /* Na een geslaagde download staat er kort een vinkje op de knop */
+  var doneTimer;
+  function flashDone(text) {
+    var label = el.exportBtn.querySelector('span');
+    el.exportBtn.classList.add('is-done');
+    label.textContent = text;
+    doneTimer = setTimeout(function () {
+      el.exportBtn.classList.remove('is-done');
+      label.textContent = 'Download post';
+    }, 1800);
   }
 
   function exportImage(mode) {
@@ -1699,8 +2025,13 @@
         });
 
     done
-      .catch(reportExportError)
-      .then(function () { setBusy(false); });
+      .then(function () {
+        setBusy(false);
+        flashDone(toClipboard ? 'Gekopieerd' : 'Gedownload');
+      }, function (err) {
+        reportExportError(err);
+        setBusy(false);
+      });
   }
 
   /* ===========================================================================
@@ -1782,6 +2113,7 @@
     DB.get(libKey(id)).then(function (rec) {
       if (!rec || !rec.settings) { toast('Deze post staat niet meer in de bibliotheek.', 'error'); return; }
       state = Object.assign({}, DEFAULTS, rec.settings);
+      migrateFocus(rec.settings);
       validateState();
       state.image = rec.image || null;
       state.imageName = rec.imageName || '';
@@ -1797,16 +2129,31 @@
     }).catch(function () { toast('De post kon niet worden geopend.', 'error'); });
   }
 
+  /* Geen bevestigingsvraag: de post en zijn miniatuur blijven in het
+     geheugen tot de toast weg is, zodat ongedaan maken hem terugzet. */
   function libDelete(id) {
     var i = libIndexOf(id);
-    var naam = i >= 0 ? library[i].name : 'Deze post';
-    if (!window.confirm('"' + naam + '" uit de bibliotheek verwijderen?')) return;
-    if (i >= 0) library.splice(i, 1);
-    if (currentProjectId === id) currentProjectId = null;
-    DB.del(libKey(id)).catch(noop);
-    DB.set(LIB_INDEX, library).catch(noop);
-    libRender();
-    toast('Uit de bibliotheek verwijderd.', 'ok');
+    if (i < 0) return;
+    var meta = library[i];
+    var wasOpen = currentProjectId === id;
+    DB.get(libKey(id)).catch(noop).then(function (record) {
+      var j = libIndexOf(id);
+      if (j >= 0) library.splice(j, 1);
+      if (wasOpen) currentProjectId = null;
+      DB.del(libKey(id)).catch(noop);
+      DB.set(LIB_INDEX, library).catch(noop);
+      libRender();
+      toast('"' + meta.name + '" verwijderd uit de bibliotheek.', 'ok', 0, record ? {
+        label: 'Ongedaan maken',
+        run: function () {
+          if (libIndexOf(id) >= 0) return;
+          library.splice(Math.min(i, library.length), 0, meta);
+          if (wasOpen) currentProjectId = id;
+          DB.set(libKey(id), record).then(function () { return DB.set(LIB_INDEX, library); }).catch(noop);
+          libRender();
+        }
+      } : null);
+    });
   }
 
   /* Losmaken: de volgende download wordt een nieuwe post in plaats van een
@@ -1897,9 +2244,17 @@
     Object.keys(DEFAULTS).forEach(function (k) {
       if (saved[k] !== undefined && saved[k] !== null && typeof saved[k] === typeof DEFAULTS[k]) state[k] = saved[k];
     });
+    migrateFocus(saved);
     validateState();
     state.image = null;
     state.imageRatio = null;
+  }
+
+  /* Tot oktober 2026 was de uitsnede een keuze Boven/Midden/Onder (focus).
+     Nu is het een vrije positie; oude posts krijgen de bijbehorende hoogte. */
+  function migrateFocus(src) {
+    if (!src || src.posY !== undefined || typeof src.focus !== 'string') return;
+    state.posY = src.focus === 'top' ? 0 : src.focus === 'bottom' ? 100 : 50;
   }
 
   /* Elke waarde terug binnen de toegestane keuzes; gebruikt bij het herstellen
@@ -1922,7 +2277,8 @@
     state.stars = clamp(parseInt(state.stars, 10) || 5, 1, 5);
     if (['card', 'open'].indexOf(state.reviewStyle) === -1) state.reviewStyle = DEFAULTS.reviewStyle;
     if (typeof state.reviewDate !== 'string') state.reviewDate = '';
-    if (['top', 'center', 'bottom'].indexOf(state.focus) === -1) state.focus = DEFAULTS.focus;
+    state.posX = clamp(Number(state.posX) || 0, 0, 100);
+    state.posY = clamp(Number(state.posY) || 0, 0, 100);
     state.overlay = clamp(state.overlay, 0, 90);
     state.zoom = clamp(state.zoom, 100, 180);
   }
@@ -1931,6 +2287,7 @@
     restore();
     showImageCard(0);
     bindEvents();
+    bindPreview();
     bindMobile();
     safeRender();
 

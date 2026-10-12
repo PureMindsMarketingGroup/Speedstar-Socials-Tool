@@ -213,7 +213,7 @@ window.SPEEDSTAR.typo = (function () {
 
   function itemsHtml(items) {
     if (!items.length) return '';
-    var uit = '<div class="pc-items">';
+    var uit = '<div class="pc-items" data-field="items">';
     items.forEach(function (it) {
       uit += '<div class="pc-item">' +
              '<span class="pc-item__icon" data-icon="' + escapeHtml(it.icon) + '" aria-hidden="true"></span>' +
@@ -233,7 +233,7 @@ window.SPEEDSTAR.typo = (function () {
 
   function starsHtml(count) {
     var n = Math.max(0, Math.min(5, Math.round(Number(count) || 0)));
-    var out = '<div class="pc-stars" aria-hidden="true">';
+    var out = '<div class="pc-stars" data-field="stars" aria-hidden="true">';
     for (var i = 1; i <= 5; i++) {
       out += '<svg class="pc-star' + (i <= n ? '' : ' is-off') + '" viewBox="0 0 24 24" ' +
              'width="24" height="24" xmlns="http://www.w3.org/2000/svg">' +
@@ -242,10 +242,13 @@ window.SPEEDSTAR.typo = (function () {
     return out + '</div>';
   }
 
-  function element(level, html) {
+  /* field: het invoerveld waar dit blok uit komt (data-field). Een klik op
+     het blok in de preview springt naar dat veld. */
+  function element(level, html, field) {
     var L = LEVELS[level];
     if (!L || !html) return '';
-    return '<' + L.tag + ' class="' + L.cls + '">' + html + '</' + L.tag + '>';
+    return '<' + L.tag + ' class="' + L.cls + '"' + (field ? ' data-field="' + field + '"' : '') + '>' +
+           html + '</' + L.tag + '>';
   }
 
   /* fields: { kicker, title, intro, data, accents } (platte strings; accents
@@ -268,8 +271,8 @@ window.SPEEDSTAR.typo = (function () {
     /* Template F: kop, inleiding en daaronder de lijst met certificeringen. */
     if (lv.items) {
       return [
-        lv.title ? element(lv.title, applyAccents(title.text.trim(), accents)) : '',
-        lv.intro ? element(lv.intro, applyAccents(intro.text.trim(), accents)) : '',
+        lv.title ? element(lv.title, applyAccents(title.text.trim(), accents), 'title') : '',
+        lv.intro ? element(lv.intro, applyAccents(intro.text.trim(), accents), 'intro') : '',
         itemsHtml(parseItems(f.items))
       ].join('');
     }
@@ -288,7 +291,7 @@ window.SPEEDSTAR.typo = (function () {
         var letter = initiaal(naam);
         return '<div class="pc-card">' +
           (naam || datum
-            ? '<div class="pc-card__head">' +
+            ? '<div class="pc-card__head" data-field="reviewer">' +
               (letter ? '<span class="pc-card__avatar" aria-hidden="true">' + escapeHtml(letter) + '</span>' : '') +
               '<span class="pc-card__who">' +
               (naam ? '<b class="pc-card__name">' + escapeHtml(naam) + '</b>' : '') +
@@ -296,14 +299,14 @@ window.SPEEDSTAR.typo = (function () {
               '</span></div>'
             : '') +
           sterren +
-          (quote ? '<p class="pc-card__text">' + quote + '</p>' : '') +
+          (quote ? '<p class="pc-card__text" data-field="title">' + quote + '</p>' : '') +
           '</div>';
       }
 
       return [
         sterren,
-        quote ? element(lv.title, '\u201c' + quote + '\u201d') : '',
-        naam ? '<p class="pc-reviewer">\u2014 ' + escapeHtml(naam) + '</p>' : ''
+        quote ? element(lv.title, '\u201c' + quote + '\u201d', 'title') : '',
+        naam ? '<p class="pc-reviewer" data-field="reviewer">\u2014 ' + escapeHtml(naam) + '</p>' : ''
       ].join('');
     }
 
@@ -311,10 +314,10 @@ window.SPEEDSTAR.typo = (function () {
        data-element eronder. De styleguide zet het cijfer eerst; het ontwerp is
        leidend. */
     return [
-      lv.kicker ? element(lv.kicker, applyAccents(kicker.text.trim(), accents)) : '',
-      lv.title  ? element(lv.title,  applyAccents(title.text.trim(),  accents)) : '',
-      lv.intro  ? element(lv.intro,  applyAccents(intro.text.trim(),  accents)) : '',
-      lv.data   ? element(lv.data, escapeHtml(data)) : ''
+      lv.kicker ? element(lv.kicker, applyAccents(kicker.text.trim(), accents), 'kicker') : '',
+      lv.title  ? element(lv.title,  applyAccents(title.text.trim(),  accents), 'title') : '',
+      lv.intro  ? element(lv.intro,  applyAccents(intro.text.trim(),  accents), 'intro') : '',
+      lv.data   ? element(lv.data, escapeHtml(data), 'data') : ''
     ].join('');
   }
 
