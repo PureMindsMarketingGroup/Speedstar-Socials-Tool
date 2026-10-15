@@ -33,7 +33,8 @@ const MODEL = process.env.AI_MODEL || 'gpt-4.1';
 const REASONING = ['low', 'medium', 'high'].includes(process.env.AI_REASONING) ? process.env.AI_REASONING : null;
 const OPENAI_URL = (process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/+$/, '') + '/chat/completions';
 const AI_TIMEOUT_MS = 110000;
-const DEFAULT_ALLOWED_ORIGINS = ['https://jelger1.github.io'];
+// GitHub Pages van Pure Minds (PureMindsMarketingGroup), en het oude adres zolang dat nog doorstuurt
+const DEFAULT_ALLOWED_ORIGINS = ['https://puremindsmarketinggroup.github.io', 'https://jelger1.github.io'];
 const ALLOWED_ORIGINS = DEFAULT_ALLOWED_ORIGINS.concat((process.env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean));
 const LOCAL_ORIGIN = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/;   // lokaal testen mag altijd
 const RATE_LIMIT = parseInt(process.env.RATE_LIMIT, 10) || 30;

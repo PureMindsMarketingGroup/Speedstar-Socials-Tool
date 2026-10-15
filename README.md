@@ -7,6 +7,7 @@ Puur HTML, CSS en vanilla JavaScript met een kleine Node-backend; geen
 framework, geen buildstap, geen dependencies.
 
 - Live: https://speedstar-post-maker.onrender.com
+- Op GitHub Pages: https://puremindsmarketinggroup.github.io/Speedstar-Socials-Tool/ (de AI loopt via de server op Render)
 - Bron van alle merkregels: [assets/STYLEGUIDE_Speedstar.md](assets/STYLEGUIDE_Speedstar.md)
 
 ---
